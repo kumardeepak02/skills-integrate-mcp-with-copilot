@@ -3,15 +3,56 @@ document.addEventListener("DOMContentLoaded", () => {
   const activitySelect = document.getElementById("activity");
   const signupForm = document.getElementById("signup-form");
   const messageDiv = document.getElementById("message");
+  const authForm = document.getElementById("auth-form");
+  const registerButton = document.getElementById("register-button");
+  const logoutButton = document.getElementById("logout-button");
+  const authStatus = document.getElementById("auth-status");
+  let currentUser = null;
+  let accessToken = localStorage.getItem("access_token");
+
+  async function apiFetch(url, options = {}) {
+    const headers = new Headers(options.headers || {});
+    if (accessToken) {
+      headers.set("Authorization", `Bearer ${accessToken}`);
+    }
+    return fetch(url, { ...options, headers });
+  }
+
+  function updateAuthStatus() {
+    const authenticated = Boolean(currentUser);
+    authStatus.textContent = authenticated
+      ? `Signed in as ${currentUser.email} (${currentUser.role})`
+      : "Log in or register to manage activities.";
+    logoutButton.classList.toggle("hidden", !authenticated);
+    authForm.querySelector('[data-action="login"]').classList.toggle("hidden", authenticated);
+    registerButton.classList.toggle("hidden", authenticated);
+  }
+
+  async function loadCurrentUser() {
+    if (!accessToken) {
+      updateAuthStatus();
+      return;
+    }
+    const response = await apiFetch("/auth/me");
+    if (response.ok) {
+      currentUser = await response.json();
+    } else {
+      accessToken = null;
+      localStorage.removeItem("access_token");
+    }
+    updateAuthStatus();
+  }
 
   // Function to fetch activities from API
   async function fetchActivities() {
     try {
-      const response = await fetch("/activities");
+      const response = await apiFetch("/activities");
       const activities = await response.json();
 
       // Clear loading message
       activitiesList.innerHTML = "";
+
+      activitySelect.innerHTML = '<option value="">-- Select an activity --</option>';
 
       // Populate activities list
       Object.entries(activities).forEach(([name, details]) => {
@@ -74,7 +115,7 @@ document.addEventListener("DOMContentLoaded", () => {
     const email = button.getAttribute("data-email");
 
     try {
-      const response = await fetch(
+      const response = await apiFetch(
         `/activities/${encodeURIComponent(
           activity
         )}/unregister?email=${encodeURIComponent(email)}`,
@@ -114,14 +155,11 @@ document.addEventListener("DOMContentLoaded", () => {
   signupForm.addEventListener("submit", async (event) => {
     event.preventDefault();
 
-    const email = document.getElementById("email").value;
     const activity = document.getElementById("activity").value;
 
     try {
-      const response = await fetch(
-        `/activities/${encodeURIComponent(
-          activity
-        )}/signup?email=${encodeURIComponent(email)}`,
+      const response = await apiFetch(
+        `/activities/${encodeURIComponent(activity)}/signup`,
         {
           method: "POST",
         }
@@ -155,6 +193,55 @@ document.addEventListener("DOMContentLoaded", () => {
     }
   });
 
+  authForm.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    const credentials = {
+      email: document.getElementById("auth-email").value,
+      password: document.getElementById("auth-password").value,
+    };
+    const response = await fetch("/auth/login", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(credentials),
+    });
+    const result = await response.json();
+    if (!response.ok) {
+      authStatus.textContent = result.detail || "Unable to log in.";
+      authStatus.className = "error";
+      return;
+    }
+    accessToken = result.access_token;
+    localStorage.setItem("access_token", accessToken);
+    currentUser = result.user;
+    authStatus.className = "info";
+    authForm.reset();
+    updateAuthStatus();
+  });
+
+  registerButton.addEventListener("click", async () => {
+    const credentials = {
+      email: document.getElementById("auth-email").value,
+      password: document.getElementById("auth-password").value,
+    };
+    const response = await fetch("/auth/register", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(credentials),
+    });
+    const result = await response.json();
+    authStatus.textContent = response.ok
+      ? "Account created. Log in to continue."
+      : result.detail || "Unable to register.";
+    authStatus.className = response.ok ? "success" : "error";
+  });
+
+  logoutButton.addEventListener("click", () => {
+    accessToken = null;
+    currentUser = null;
+    localStorage.removeItem("access_token");
+    updateAuthStatus();
+  });
+
   // Initialize app
-  fetchActivities();
+  loadCurrentUser().then(fetchActivities);
 });

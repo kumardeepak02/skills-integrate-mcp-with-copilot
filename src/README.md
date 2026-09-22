@@ -5,7 +5,9 @@ A super simple FastAPI application that allows students to view and sign up for 
 ## Features
 
 - View all available extracurricular activities
-- Sign up for activities
+- Register and log in with a student account
+- Sign up for activities as the authenticated user
+- Unregister yourself from activities
 
 ## Getting Started
 
@@ -30,7 +32,11 @@ A super simple FastAPI application that allows students to view and sign up for 
 | Method | Endpoint                                                          | Description                                                         |
 | ------ | ----------------------------------------------------------------- | ------------------------------------------------------------------- |
 | GET    | `/activities`                                                     | Get all activities with their details and current participant count |
-| POST   | `/activities/{activity_name}/signup?email=student@mergington.edu` | Sign up for an activity                                             |
+| POST   | `/auth/register`                                                  | Create a student account                                            |
+| POST   | `/auth/login`                                                     | Log in and receive a bearer token                                   |
+| GET    | `/auth/me`                                                        | Get the authenticated user's profile                                |
+| POST   | `/activities/{activity_name}/signup`                              | Sign up the authenticated user                                      |
+| DELETE | `/activities/{activity_name}/unregister?email=student@mergington.edu` | Unregister yourself; staff can manage other users                  |
 
 ## Data Model
 
@@ -47,4 +53,4 @@ The application uses a simple data model with meaningful identifiers:
    - Name
    - Grade level
 
-All data is stored in memory, which means data will be reset when the server restarts.
+All activity, account, and session data is stored in memory, which means it will be reset when the server restarts. Passwords are stored as salted PBKDF2 hashes, never as plaintext.
