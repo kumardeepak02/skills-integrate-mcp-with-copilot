@@ -35,6 +35,22 @@ main {
   justify-content: center;
 }
 
+.auth-actions {
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.auth-actions button:nth-child(2) {
+  background-color: #4b5563;
+}
+
+#auth-status {
+  margin-top: 15px;
+  padding: 10px;
+  border-radius: 4px;
+}
+
 @media (min-width: 768px) {
   main {
     grid-template-columns: 2fr 1fr;

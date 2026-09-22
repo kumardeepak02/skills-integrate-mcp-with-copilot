@@ -5,14 +5,22 @@ A super simple FastAPI application that allows students to view and sign up
 for extracurricular activities at Mergington High School.
 """
 
-from fastapi import FastAPI, HTTPException
+from fastapi import Depends, FastAPI, HTTPException, status
+from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import RedirectResponse
+from pydantic import BaseModel
+import hashlib
 import os
 from pathlib import Path
+import secrets
 
 app = FastAPI(title="Mergington High School API",
               description="API for viewing and signing up for extracurricular activities")
+
+security = HTTPBearer(auto_error=False)
+users = {}
+sessions = {}
 
 # Mount the static files directory
 current_dir = Path(__file__).parent
@@ -78,9 +86,95 @@ activities = {
 }
 
 
+class Credentials(BaseModel):
+    email: str
+    password: str
+
+
+def validate_email(email: str):
+    if "@" not in email or email.startswith("@") or email.endswith("@"):
+        raise HTTPException(status_code=422, detail="A valid email is required")
+    return email.lower()
+
+
+def hash_password(password: str, salt: bytes | None = None):
+    if len(password) < 8:
+        raise HTTPException(
+            status_code=422,
+            detail="Password must be at least 8 characters long",
+        )
+    salt = salt or secrets.token_bytes(16)
+    digest = hashlib.pbkdf2_hmac("sha256", password.encode(), salt, 120000)
+    return f"{salt.hex()}${digest.hex()}"
+
+
+def verify_password(password: str, stored_hash: str):
+    salt_hex, digest_hex = stored_hash.split("$", 1)
+    expected = hashlib.pbkdf2_hmac(
+        "sha256", password.encode(), bytes.fromhex(salt_hex), 120000
+    )
+    return secrets.compare_digest(expected.hex(), digest_hex)
+
+
+def get_current_user(
+    credentials: HTTPAuthorizationCredentials | None = Depends(security),
+):
+    if credentials is None or credentials.scheme.lower() != "bearer":
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Authentication required",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+
+    email = sessions.get(credentials.credentials)
+    user = users.get(email)
+    if user is None:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid or expired token",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+    return user
+
+
+def can_manage_other_users(user: dict):
+    return user["role"] in {"staff", "administrator"}
+
+
 @app.get("/")
 def root():
     return RedirectResponse(url="/static/index.html")
+
+
+@app.post("/auth/register", status_code=201)
+def register(credentials: Credentials):
+    email = validate_email(credentials.email)
+    if email in users:
+        raise HTTPException(status_code=409, detail="An account already exists")
+
+    users[email] = {
+        "email": email,
+        "role": "student",
+        "password_hash": hash_password(credentials.password),
+    }
+    return {"email": email, "role": "student"}
+
+
+@app.post("/auth/login")
+def login(credentials: Credentials):
+    email = validate_email(credentials.email)
+    user = users.get(email)
+    if user is None or not verify_password(credentials.password, user["password_hash"]):
+        raise HTTPException(status_code=401, detail="Invalid email or password")
+
+    token = secrets.token_urlsafe(32)
+    sessions[token] = email
+    return {"access_token": token, "token_type": "bearer", "user": {"email": email, "role": user["role"]}}
+
+
+@app.get("/auth/me")
+def get_profile(current_user: dict = Depends(get_current_user)):
+    return {"email": current_user["email"], "role": current_user["role"]}
 
 
 @app.get("/activities")
@@ -89,7 +183,7 @@ def get_activities():
 
 
 @app.post("/activities/{activity_name}/signup")
-def signup_for_activity(activity_name: str, email: str):
+def signup_for_activity(activity_name: str, current_user: dict = Depends(get_current_user)):
     """Sign up a student for an activity"""
     # Validate activity exists
     if activity_name not in activities:
@@ -97,6 +191,10 @@ def signup_for_activity(activity_name: str, email: str):
 
     # Get the specific activity
     activity = activities[activity_name]
+    email = current_user["email"]
+
+    if len(activity["participants"]) >= activity["max_participants"]:
+        raise HTTPException(status_code=409, detail="Activity is full")
 
     # Validate student is not already signed up
     if email in activity["participants"]:
@@ -111,7 +209,11 @@ def signup_for_activity(activity_name: str, email: str):
 
 
 @app.delete("/activities/{activity_name}/unregister")
-def unregister_from_activity(activity_name: str, email: str):
+def unregister_from_activity(
+    activity_name: str,
+    email: str,
+    current_user: dict = Depends(get_current_user),
+):
     """Unregister a student from an activity"""
     # Validate activity exists
     if activity_name not in activities:
@@ -119,6 +221,13 @@ def unregister_from_activity(activity_name: str, email: str):
 
     # Get the specific activity
     activity = activities[activity_name]
+
+    email = validate_email(email)
+    if email != current_user["email"] and not can_manage_other_users(current_user):
+        raise HTTPException(
+            status_code=403,
+            detail="You can only unregister yourself",
+        )
 
     # Validate student is signed up
     if email not in activity["participants"]:
